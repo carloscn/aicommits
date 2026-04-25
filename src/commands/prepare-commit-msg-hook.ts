@@ -1,10 +1,14 @@
 import fs from 'fs/promises';
 import { intro, outro, spinner } from '@clack/prompts';
 import { black, green, red, bgCyan } from 'kolorist';
-import { getStagedDiff } from '../utils/git.js';
+import { assertGitRepo, getStagedDiff } from '../utils/git.js';
 import { getConfig } from '../utils/config-runtime.js';
 import { getProvider } from '../feature/providers/index.js';
 import { generateCommitMessage } from '../utils/openai.js';
+import {
+	generateCommitMessageCursorAgent,
+	getCursorAgentMaxDiffChars,
+} from '../utils/cursor-agent.js';
 import { KnownError, handleCommandError } from '../utils/error.js';
 import { isHeadless } from '../utils/headless.js';
 
@@ -28,6 +32,8 @@ export default () =>
 		if (!staged) {
 			return;
 		}
+
+		const gitWorkspace = await assertGitRepo();
 
 		const headless = isHeadless();
 		if (!headless) {
@@ -56,10 +62,16 @@ export default () =>
 		const baseUrl = providerInstance.getBaseUrl();
 		const apiKey = providerInstance.getApiKey() || '';
 		const providerHeaders = providerInstance.getHeaders();
+		const isCursorAgent = providerInstance.name === 'cursoragent';
 
 		// Use config timeout, or default per provider
 		const timeout =
-			config.timeout || (providerInstance.name === 'ollama' ? 30_000 : 10_000);
+			config.timeout ||
+			(providerInstance.name === 'ollama'
+				? 30_000
+				: providerInstance.name === 'cursoragent'
+					? 120_000
+					: 10_000);
 
 		// Use the unified model or provider default
 		let model = config.OPENAI_MODEL || providerInstance.getDefaultModel();
@@ -68,18 +80,36 @@ export default () =>
 		s?.start('The AI is analyzing your changes');
 		let messages: string[];
 		try {
-			const result = await generateCommitMessage({
-				baseUrl,
-				apiKey,
-				model,
-				locale: config.locale,
-				diff: staged!.diff,
-				completions: config.generate,
-				maxLength: config['max-length'],
-				type: config.type,
-				timeout,
-				headers: providerHeaders,
-			});
+			let hookDiff = staged!.diff;
+			if (isCursorAgent && hookDiff.length > getCursorAgentMaxDiffChars()) {
+				hookDiff =
+					hookDiff.substring(0, getCursorAgentMaxDiffChars()) +
+					'\n\n[Diff truncated due to size]';
+			}
+			const result = isCursorAgent
+				? await generateCommitMessageCursorAgent({
+						model,
+						locale: config.locale,
+						diff: hookDiff,
+						completions: config.generate,
+						maxLength: config['max-length'],
+						type: config.type,
+						timeout,
+						workspace: gitWorkspace,
+						apiKey: apiKey || undefined,
+					})
+				: await generateCommitMessage({
+						baseUrl,
+						apiKey,
+						model,
+						locale: config.locale,
+						diff: hookDiff,
+						completions: config.generate,
+						maxLength: config['max-length'],
+						type: config.type,
+						timeout,
+						headers: providerHeaders,
+					});
 			messages = result.messages;
 		} finally {
 			s?.stop('Changes analyzed');

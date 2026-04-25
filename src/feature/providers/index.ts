@@ -1,6 +1,7 @@
 import { Provider, type ProviderDef } from './base.js';
 import type { ValidConfig } from '../../utils/config-types.js';
 import { providers } from './providers-data.js';
+import { CursorAgentProvider } from './cursoragent.js';
 
 export { Provider } from './base.js';
 export type { ProviderDef } from './base.js';
@@ -9,7 +10,11 @@ export { providers };
 export function getProvider(config: ValidConfig): Provider | null {
 	const providerName = config.provider;
 	const pDef = providers.find((p) => p.name === providerName);
-	return pDef ? new Provider(pDef, config) : null;
+	if (!pDef) return null;
+	if (providerName === 'cursoragent') {
+		return new CursorAgentProvider(pDef, config);
+	}
+	return new Provider(pDef, config);
 }
 
 export function getAvailableProviders(): { value: string; label: string }[] {

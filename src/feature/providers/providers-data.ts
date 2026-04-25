@@ -6,6 +6,7 @@ import { OpenRouterProvider } from './openrouter.js';
 import { LMStudioProvider } from './lmstudio.js';
 import { GroqProvider } from './groq.js';
 import { XAiProvider } from './xai.js';
+import { CursorAgentProviderDef } from './cursoragent.js';
 
 export const providers = [
 	TogetherProvider,
@@ -14,6 +15,7 @@ export const providers = [
 	XAiProvider,
 	OllamaProvider,
 	LMStudioProvider,
+	CursorAgentProviderDef,
 	OpenRouterProvider,
 	OpenAiCustom,
 ];

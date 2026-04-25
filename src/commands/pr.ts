@@ -161,6 +161,12 @@ export default command(
 				throw new KnownError('No provider configured');
 			}
 
+			if (configProvider.name === 'cursoragent') {
+				throw new KnownError(
+					'The `pr` command does not support Cursor Agent (CLI). Use an OpenAI-compatible HTTP provider for PR title/description, or create the PR from your host UI.'
+				);
+			}
+
 			let baseUrl = configProvider.getBaseUrl();
 			if (!baseUrl || baseUrl === '') {
 				throw new KnownError(

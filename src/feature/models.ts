@@ -3,7 +3,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { execa } from 'execa';
 import type { ProviderDef } from './providers/base.js';
+import {
+	CURSOR_AGENT_BASE_URL,
+	buildCursorAgentProcessEnv,
+	getCursorAgentBinary,
+	parseAgentModelsList,
+} from '../utils/cursor-agent.js';
 import { CURRENT_LABEL_FORMAT } from '../utils/constants.js';
 import { isCancel, spinner } from '@clack/prompts';
 import { fileExists } from '../utils/fs.js';
@@ -79,6 +86,39 @@ export const fetchModels = async (
 
 	if (cached && now - cached.timestamp < CACHE_DURATION) {
 		return cached.data;
+	}
+
+	if (baseUrl === CURSOR_AGENT_BASE_URL) {
+		const bin = getCursorAgentBinary();
+		try {
+			const listArgs = [
+				'--sandbox',
+				'disabled',
+				...(apiKey ? ['--api-key', apiKey] : []),
+				'--list-models',
+			];
+			const { stdout, failed, stderr } = await execa(bin, listArgs, {
+				encoding: 'utf8',
+				reject: false,
+				env: buildCursorAgentProcessEnv(),
+				timeout: 120_000,
+			});
+			if (failed) {
+				const errText = (stderr || stdout || '').trim() || 'agent --list-models failed';
+				return { models: [], error: errText };
+			}
+			const ids = parseAgentModelsList(stdout);
+			const modelsArray = ids.map((id) => ({ id, name: id }));
+			const result = { models: modelsArray };
+			if (modelsArray.length > 0) {
+				await writeCache(cacheKey, { data: result, timestamp: now });
+			}
+			return result;
+		} catch (error: unknown) {
+			const errorMessage =
+				error instanceof Error ? error.message : 'Request failed';
+			return { models: [], error: errorMessage };
+		}
 	}
 
 	try {

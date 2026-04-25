@@ -7,10 +7,10 @@
 - **Test single file:** `pnpm tsx tests/specs/<file>.ts`
 
 ## Architecture
-CLI tool that generates git commit messages using AI (OpenAI/Together AI or any OpenAI compatible endpoint).
+CLI tool that generates git commit messages using AI (OpenAI/Together AI, Cursor Agent CLI, or any OpenAI compatible endpoint).
 - `src/cli.ts` - Main entry point using cleye for CLI parsing
 - `src/commands/` - CLI subcommands (aicommits, config, hook, model, pr, setup)
-- `src/utils/` - Shared utilities (git, openai, config, prompts)
+- `src/utils/` - Shared utilities (git, openai, config, prompts, `cursor-agent.ts` for Cursor CLI; optional `AICOMMITS_CURSOR_MAX_DIFF_CHARS` caps diff size for speed)
 - `src/feature/` - Feature-specific logic
 - `tests/specs/` - Test files using manten framework
 

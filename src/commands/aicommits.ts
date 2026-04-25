@@ -22,6 +22,12 @@ import {
 	generateCommitDescription,
 	combineCommitMessages,
 } from '../utils/openai.js';
+import {
+	generateCommitMessageCursorAgent,
+	generateCommitDescriptionCursorAgent,
+	combineCommitMessagesCursorAgent,
+	getCursorAgentMaxDiffChars,
+} from '../utils/cursor-agent.js';
 import { KnownError, handleCommandError } from '../utils/error.js';
 
 import { getCommitMessage } from '../utils/commit-helpers.js';
@@ -45,7 +51,7 @@ export default async (
 			intro(bgCyan(black(' aicommits ')));
 		}
 
-		await assertGitRepo();
+		const gitWorkspace = await assertGitRepo();
 
 		if (stageAll) {
 			await execa('git', ['add', '--update']);
@@ -96,7 +102,12 @@ export default async (
 
 		// Use config timeout, or default per provider
 		const timeout =
-			config.timeout || (providerInstance.name === 'ollama' ? 30_000 : 10_000);
+			config.timeout ||
+			(providerInstance.name === 'ollama'
+				? 30_000
+				: providerInstance.name === 'cursoragent'
+					? 120_000
+					: 10_000);
 
 		// Validate provider config
 		const validation = providerInstance.validateConfig();
@@ -134,7 +145,10 @@ export default async (
 			const baseUrl = providerInstance.getBaseUrl();
 			const apiKey = providerInstance.getApiKey() || '';
 			const providerHeaders = providerInstance.getHeaders();
-			const maxDiffLength = 30000;
+			const isCursorAgent = providerInstance.name === 'cursoragent';
+			const maxDiffLength = isCursorAgent
+				? getCursorAgentMaxDiffChars()
+				: 30000;
 			let diffToUse = staged.diff;
 			if (diffToUse.length > maxDiffLength) {
 				diffToUse =
@@ -143,32 +157,57 @@ export default async (
 			}
 
 			if (config.type === 'subject+body') {
-				const result = await generateCommitMessage({
-					baseUrl,
-					apiKey,
-					model: config.model!,
-					locale: config.locale,
-					diff: diffToUse,
-					completions: 1,
-					maxLength: config['max-length'],
-					type: 'subject+body',
-					timeout,
-					customPrompt,
-					headers: providerHeaders,
-				});
+				const result = isCursorAgent
+					? await generateCommitMessageCursorAgent({
+							model: config.model!,
+							locale: config.locale,
+							diff: diffToUse,
+							completions: 1,
+							maxLength: config['max-length'],
+							type: 'subject+body',
+							timeout,
+							customPrompt,
+							workspace: gitWorkspace,
+							apiKey: apiKey || undefined,
+						})
+					: await generateCommitMessage({
+							baseUrl,
+							apiKey,
+							model: config.model!,
+							locale: config.locale,
+							diff: diffToUse,
+							completions: 1,
+							maxLength: config['max-length'],
+							type: 'subject+body',
+							timeout,
+							customPrompt,
+							headers: providerHeaders,
+						});
 				const title = result.messages[0];
-				const { description } = await generateCommitDescription({
-					baseUrl,
-					apiKey,
-					model: config.model!,
-					locale: config.locale,
-					title,
-					diff: diffToUse,
-					timeout,
-					maxLength: config['max-length'],
-					customPrompt,
-					headers: providerHeaders,
-				});
+				const { description } = isCursorAgent
+					? await generateCommitDescriptionCursorAgent({
+							model: config.model!,
+							locale: config.locale,
+							title,
+							diff: diffToUse,
+							timeout,
+							maxLength: config['max-length'],
+							customPrompt,
+							workspace: gitWorkspace,
+							apiKey: apiKey || undefined,
+						})
+					: await generateCommitDescription({
+							baseUrl,
+							apiKey,
+							model: config.model!,
+							locale: config.locale,
+							title,
+							diff: diffToUse,
+							timeout,
+							maxLength: config['max-length'],
+							customPrompt,
+							headers: providerHeaders,
+						});
 				messages = [
 					description.trim()
 						? `${title}\n\n${description.trim()}`
@@ -193,26 +232,41 @@ export default async (
 					const chunkDiff = await getStagedDiffForFiles(chunk, excludeFiles);
 					if (chunkDiff && chunkDiff.diff) {
 						// Truncate diff if too large to avoid context limits
-						const maxDiffLength = 30000; // Approximate 7.5k tokens
+						const chunkMaxDiff = isCursorAgent
+							? getCursorAgentMaxDiffChars()
+							: 30000;
 						let diffToUse = chunkDiff.diff;
-						if (diffToUse.length > maxDiffLength) {
+						if (diffToUse.length > chunkMaxDiff) {
 							diffToUse =
-								diffToUse.substring(0, maxDiffLength) +
+								diffToUse.substring(0, chunkMaxDiff) +
 								'\n\n[Diff truncated due to size]';
 						}
-						const result = await generateCommitMessage({
-							baseUrl,
-							apiKey,
-							model: config.model!,
-							locale: config.locale,
-							diff: diffToUse,
-							completions: config.generate,
-							maxLength: config['max-length'],
-							type: config.type,
-							timeout,
-							customPrompt,
-							headers: providerHeaders,
-						});
+						const result = isCursorAgent
+							? await generateCommitMessageCursorAgent({
+									model: config.model!,
+									locale: config.locale,
+									diff: diffToUse,
+									completions: config.generate,
+									maxLength: config['max-length'],
+									type: config.type,
+									timeout,
+									customPrompt,
+									workspace: gitWorkspace,
+									apiKey: apiKey || undefined,
+								})
+							: await generateCommitMessage({
+									baseUrl,
+									apiKey,
+									model: config.model!,
+									locale: config.locale,
+									diff: diffToUse,
+									completions: config.generate,
+									maxLength: config['max-length'],
+									type: config.type,
+									timeout,
+									customPrompt,
+									headers: providerHeaders,
+								});
 						chunkMessages.push(...result.messages);
 						if (result.usage) {
 							totalUsage.prompt_tokens +=
@@ -232,18 +286,30 @@ export default async (
 				}
 
 				// Combine the chunk messages
-				const combineResult = await combineCommitMessages({
-					messages: chunkMessages,
-					baseUrl,
-					apiKey,
-					model: config.model!,
-					locale: config.locale,
-					maxLength: config['max-length'],
-					type: config.type,
-					timeout,
-					customPrompt,
-					headers: providerHeaders,
-				});
+				const combineResult = isCursorAgent
+					? await combineCommitMessagesCursorAgent({
+							messages: chunkMessages,
+							model: config.model!,
+							locale: config.locale,
+							maxLength: config['max-length'],
+							type: config.type,
+							timeout,
+							customPrompt,
+							workspace: gitWorkspace,
+							apiKey: apiKey || undefined,
+						})
+					: await combineCommitMessages({
+							messages: chunkMessages,
+							baseUrl,
+							apiKey,
+							model: config.model!,
+							locale: config.locale,
+							maxLength: config['max-length'],
+							type: config.type,
+							timeout,
+							customPrompt,
+							headers: providerHeaders,
+						});
 				messages = combineResult.messages;
 				if (combineResult.usage) {
 					totalUsage.prompt_tokens +=
@@ -261,19 +327,32 @@ export default async (
 				}
 				usage = totalUsage;
 			} else {
-				const result = await generateCommitMessage({
-					baseUrl,
-					apiKey,
-					model: config.model!,
-					locale: config.locale,
-					diff: diffToUse,
-					completions: config.generate,
-					maxLength: config['max-length'],
-					type: config.type,
-					timeout,
-					customPrompt,
-					headers: providerHeaders,
-				});
+				const result = isCursorAgent
+					? await generateCommitMessageCursorAgent({
+							model: config.model!,
+							locale: config.locale,
+							diff: diffToUse,
+							completions: config.generate,
+							maxLength: config['max-length'],
+							type: config.type,
+							timeout,
+							customPrompt,
+							workspace: gitWorkspace,
+							apiKey: apiKey || undefined,
+						})
+					: await generateCommitMessage({
+							baseUrl,
+							apiKey,
+							model: config.model!,
+							locale: config.locale,
+							diff: diffToUse,
+							completions: config.generate,
+							maxLength: config['max-length'],
+							type: config.type,
+							timeout,
+							customPrompt,
+							headers: providerHeaders,
+						});
 				messages = result.messages;
 				usage = result.usage;
 			}
